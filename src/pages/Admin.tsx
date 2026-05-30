@@ -1,33 +1,39 @@
-import { useState, useEffect, useCallback } from "react";
-import { useNavigate, Link } from "react-router-dom"; // <-- Importamos o useNavigate
-import { supabase } from "@/integrations/supabase/client";
-import {
-  Acolyte,
-  ScheduleData,
-  VariableRule,
-  MONTH_NAMES,
-  RuleViolation,
-} from "@/types/schedule";
-import { generateSchedule, validateSchedule } from "@/lib/schedule-engine";
 import AcolyteManager from "@/components/AcolyteManager";
 import RuleManager from "@/components/RuleManager";
 import ScheduleEditor from "@/components/ScheduleEditor";
+import ScheduleSettingsManager from "@/components/ScheduleSettingsManager";
 import ScheduleView from "@/components/ScheduleView";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Label } from "@/components/ui/label";
 import { toast } from "@/components/ui/sonner";
+import { supabase } from "@/integrations/supabase/client";
+import { generateSchedule, validateSchedule } from "@/lib/schedule-engine";
 import {
-  LogOut,
-  RefreshCw,
-  Save,
-  Eye,
-  Edit2,
-  AlertTriangle,
+  Acolyte,
+  DEFAULT_SCHEDULE_SETTINGS,
+  MONTH_NAMES,
+  RuleViolation,
+  ScheduleData,
+  ScheduleSettings,
+  VariableRule,
+} from "@/types/schedule";
+import {
   AlertCircle,
+  AlertTriangle,
+  CheckCircle,
   ChevronLeft,
   ChevronRight,
+  Edit2,
+  Eye,
+  LogOut,
+  Moon,
+  RefreshCw,
+  Save,
+  Sun,
+  Trash,
 } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Link, useNavigate } from "react-router-dom"; // <-- Importamos o useNavigate
+import Swal from "sweetalert2";
 
 export default function Admin() {
   const navigate = useNavigate();
@@ -43,12 +49,18 @@ export default function Admin() {
   const [scheduleId, setScheduleId] = useState<string | null>(null);
   const [scheduleStatus, setScheduleStatus] = useState<string>("draft");
   const [variableRules, setVariableRules] = useState<VariableRule[]>([]);
+  const [scheduleSettings, setScheduleSettings] = useState<ScheduleSettings>(
+    DEFAULT_SCHEDULE_SETTINGS,
+  );
   const [violations, setViolations] = useState<RuleViolation[]>([]);
   const [month, setMonth] = useState(new Date().getMonth() + 1);
   const [year, setYear] = useState(new Date().getFullYear());
+  const [scheduleLoading, setScheduleLoading] = useState(true);
   const [isVacation, setIsVacation] = useState(false);
   const [viewMode, setViewMode] = useState<"edit" | "preview">("edit");
-  const [tab, setTab] = useState<"schedule" | "acolytes" | "rules">("schedule");
+  const [tab, setTab] = useState<
+    "schedule" | "acolytes" | "rules" | "settings"
+  >("schedule");
 
   // Funções de carregamento
   const loadAcolytes = useCallback(async () => {
@@ -57,6 +69,11 @@ export default function Admin() {
   }, []);
 
   const loadSchedule = useCallback(async () => {
+    setScheduleLoading(true);
+    setScheduleData(null);
+    setScheduleId(null);
+    setScheduleStatus("draft");
+
     const { data } = await supabase
       .from("schedules")
       .select("*")
@@ -68,11 +85,9 @@ export default function Admin() {
       setScheduleId(data.id);
       setScheduleData(data.data as unknown as ScheduleData);
       setScheduleStatus(data.status);
-    } else {
-      setScheduleId(null);
-      setScheduleData(null);
-      setScheduleStatus("draft");
     }
+
+    setScheduleLoading(false);
   }, [month, year]);
 
   const loadRules = useCallback(async () => {
@@ -86,6 +101,39 @@ export default function Admin() {
       .eq("schedule_id", scheduleId);
     if (data) setVariableRules(data as unknown as VariableRule[]);
   }, [scheduleId]);
+
+  const loadScheduleSettings = useCallback(async () => {
+    const { data } = await (supabase as any)
+      .from("schedule_settings")
+      .select("value")
+      .eq("key", "default")
+      .maybeSingle();
+
+    if (data?.value) {
+      setScheduleSettings({
+        ...DEFAULT_SCHEDULE_SETTINGS,
+        ...(data.value as Partial<ScheduleSettings>),
+      });
+    }
+  }, []);
+
+  const handleSaveScheduleSettings = async (settings: ScheduleSettings) => {
+    const { error } = await (supabase as any).from("schedule_settings").upsert(
+      {
+        key: "default",
+        value: settings,
+      },
+      { onConflict: "key" },
+    );
+
+    if (error) {
+      toast.error("Erro ao salvar configurações");
+      return;
+    }
+
+    setScheduleSettings(settings);
+    toast.success("Configurações salvas");
+  };
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -116,12 +164,33 @@ export default function Admin() {
       setUser(session.user);
       setIsAdmin(true);
       loadAcolytes();
-      loadSchedule();
+      loadScheduleSettings();
       setLoading(false);
     };
 
     checkAuth();
-  }, [navigate, loadAcolytes, loadSchedule]); // Recarrega se mês/ano mudar
+  }, [navigate, loadAcolytes, loadScheduleSettings]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    loadSchedule();
+  }, [isAdmin, loadSchedule]);
+
+  const [darkMode, setDarkMode] = useState(() => {
+    return localStorage.getItem("theme") === "dark";
+  });
+
+  useEffect(() => {
+    const root = window.document.documentElement;
+
+    if (darkMode) {
+      root.classList.add("dark");
+      localStorage.setItem("theme", "dark");
+    } else {
+      root.classList.remove("dark");
+      localStorage.setItem("theme", "light");
+    }
+  }, [darkMode]);
 
   // Carrega regras sempre que o scheduleId mudar
   useEffect(() => {
@@ -136,12 +205,13 @@ export default function Admin() {
         acolytes,
         variableRules,
         isVacation,
+        scheduleSettings,
       );
       setViolations(v);
     } else {
       setViolations([]);
     }
-  }, [scheduleData, acolytes, variableRules, isVacation]);
+  }, [scheduleData, acolytes, variableRules, isVacation, scheduleSettings]);
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
@@ -149,31 +219,88 @@ export default function Admin() {
   };
 
   const handleGenerate = async () => {
-    const data = generateSchedule(
-      year,
-      month,
-      acolytes,
-      variableRules,
-      isVacation,
-    );
-    setScheduleData(data);
+    if (scheduleData) {
+      const result = await Swal.fire({
+        title: "Sobrescrever escala?",
+        text: "Já existe uma escala para este mês. Se gerar uma nova, a atual será perdida!",
+        icon: "question",
+        showCancelButton: true,
+        confirmButtonText: "Sim, gerar nova",
+        cancelButtonText: "Manter atual",
+      });
 
-    // Upsert schedule
+      if (!result.isConfirmed) return;
+    }
+    let bestData: ScheduleData | null = null;
+    let bestViolationsCount = Infinity;
+    const MAX_RETRIES = 100; // Aumentei um pouco o limite pois encontrar < 5 totais é mais difícil que apenas < 5 erros
+
+    toast.info("Otimizando escala (Erros + Alertas). Aguarde...");
+
+    for (let i = 0; i < MAX_RETRIES; i++) {
+      const data = generateSchedule(
+        year,
+        month,
+        acolytes,
+        variableRules,
+        isVacation,
+        scheduleSettings,
+      );
+
+      const currentViolations = validateSchedule(
+        data,
+        acolytes,
+        variableRules,
+        isVacation,
+        scheduleSettings,
+      );
+
+      // 🔥 Agora contamos o total (Erros + Avisos)
+      const totalViolationsCount = currentViolations.length;
+
+      if (totalViolationsCount < bestViolationsCount) {
+        bestViolationsCount = totalViolationsCount;
+        bestData = data;
+      }
+
+      // Se a escala tiver 5 ou menos problemas no total, aceitamos imediatamente
+      if (totalViolationsCount <= 5) {
+        console.log(
+          `Escala excelente encontrada na tentativa ${i + 1} com ${totalViolationsCount} violações totais.`,
+        );
+        break;
+      }
+    }
+
+    if (!bestData) return;
+
+    setScheduleData(bestData);
+
     if (scheduleId) {
       await supabase
         .from("schedules")
-        .update({ data: data as any })
+        .update({ data: bestData as any })
         .eq("id", scheduleId);
     } else {
       const { data: newSched } = await supabase
         .from("schedules")
-        .insert([{ month, year, data: data as any, status: "draft" }] as any)
+        .insert([
+          { month, year, data: bestData as any, status: "draft" },
+        ] as any)
         .select()
         .single();
       if (newSched) setScheduleId(newSched.id);
     }
 
-    toast.success("Escala gerada com sucesso!");
+    if (bestViolationsCount <= 5) {
+      toast.success(
+        `Escala gerada! Total de problemas: ${bestViolationsCount}`,
+      );
+    } else {
+      toast.warning(
+        `Após ${MAX_RETRIES} tentativas, a melhor escala teve ${bestViolationsCount} problemas.`,
+      );
+    }
   };
 
   const handleSave = async () => {
@@ -182,7 +309,14 @@ export default function Admin() {
       .from("schedules")
       .update({ data: scheduleData as any })
       .eq("id", scheduleId);
-    toast.success("Escala salva");
+    Swal.fire({
+      position: "center",
+      icon: "success",
+      title: "Escala salva com sucesso!",
+      showConfirmButton: true,
+      timer: 2000,
+      timerProgressBar: true,
+    });
   };
 
   const handlePublish = async () => {
@@ -196,6 +330,38 @@ export default function Admin() {
     toast.success(
       newStatus === "published" ? "Escala publicada!" : "Escala despublicada",
     );
+  };
+
+  const handleDelete = async () => {
+    if (!scheduleId) return;
+
+    const result = await Swal.fire({
+      title: "Tem certeza?",
+      text: "Esta escala será apagada permanentemente!",
+      icon: "warning",
+      showCancelButton: true,
+      confirmButtonColor: "#d33", // Cor de perigo
+      cancelButtonColor: "#3085d6",
+      cancelButtonText: "Cancelar",
+      confirmButtonText: "Sim, excluir!",
+      color: "var(--foreground)",
+    });
+
+    if (result.isConfirmed) {
+      const { error } = await supabase
+        .from("schedules")
+        .delete()
+        .eq("id", scheduleId);
+
+      if (!error) {
+        setScheduleId(null);
+        setScheduleData(null);
+        setScheduleStatus("draft");
+        Swal.fire("Excluída!", "A escala foi removida.", "success");
+      } else {
+        toast.error("Erro ao excluir escala");
+      }
+    }
   };
 
   const changeMonth = (delta: number) => {
@@ -240,26 +406,51 @@ export default function Admin() {
   return (
     <div className="min-h-screen bg-background">
       <header className="border-b border-border bg-card/80 backdrop-blur sticky top-0 z-10">
-        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Link
-              to="/"
-              className="text-sm text-muted-foreground hover:text-foreground"
-            >
-              ← Voltar
-            </Link>
-            <h1 className="font-heading font-semibold text-lg">Painel Admin</h1>
+        <div className="max-w-6xl mx-auto px-3 sm:px-4 py-3 flex items-center justify-between gap-3">
+          {/* Título */}
+          <div className="flex min-w-0 items-center gap-3">
+            <h1 className="font-heading font-semibold text-base sm:text-lg truncate">
+              Painel do Administrador
+            </h1>
           </div>
-          <Button variant="ghost" size="sm" onClick={handleSignOut}>
-            <LogOut className="h-4 w-4 mr-1" /> Sair
-          </Button>
+
+          {/* Ações */}
+          <div className="flex items-center gap-2">
+            {/* Toggle Dark Mode */}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setDarkMode((prev) => !prev)}
+              className="rounded-full"
+            >
+              {darkMode ? (
+                <Sun className="h-4 w-4" />
+              ) : (
+                <Moon className="h-4 w-4" />
+              )}
+            </Button>
+
+            {/* Divider sutil */}
+            <div className="w-px h-5 bg-border mx-1" />
+
+            {/* Logout */}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleSignOut}
+              className="flex items-center gap-1"
+            >
+              <LogOut className="h-4 w-4" />
+              <span className="hidden sm:inline">Sair</span>
+            </Button>
+          </div>
         </div>
       </header>
 
-      <div className="max-w-6xl mx-auto px-4 py-6">
+      <div className="max-w-6xl mx-auto px-3 sm:px-4 py-6 overflow-hidden">
         {/* Tabs */}
-        <div className="flex gap-1 mb-6 border-b border-border">
-          {(["schedule", "acolytes", "rules"] as const).map((t) => (
+        <div className="flex flex-wrap gap-1 mb-6 border-b border-border">
+          {(["schedule", "acolytes", "rules", "settings"] as const).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -273,7 +464,9 @@ export default function Admin() {
                 ? "Escala"
                 : t === "acolytes"
                   ? "Acólitos"
-                  : "Regras"}
+                  : t === "rules"
+                    ? "Regras"
+                    : "Configurações"}
             </button>
           ))}
         </div>
@@ -296,11 +489,19 @@ export default function Admin() {
             </div>
           ))}
 
+        {tab === "settings" && (
+          <ScheduleSettingsManager
+            acolytes={acolytes}
+            settings={scheduleSettings}
+            onSave={handleSaveScheduleSettings}
+          />
+        )}
+
         {tab === "schedule" && (
           <div className="space-y-4">
             {/* Month selector + actions */}
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="flex items-center gap-1">
+            <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+              <div className="flex w-full items-center justify-center gap-1 sm:w-auto">
                 <Button
                   variant="ghost"
                   size="icon"
@@ -309,7 +510,7 @@ export default function Admin() {
                 >
                   <ChevronLeft className="h-4 w-4" />
                 </Button>
-                <span className="font-heading font-semibold text-lg min-w-[160px] text-center">
+                <span className="min-w-0 flex-1 font-heading font-semibold text-base text-center sm:min-w-[160px] sm:flex-none sm:text-lg">
                   {MONTH_NAMES[month - 1]} {year}
                 </span>
                 <Button
@@ -333,13 +534,18 @@ export default function Admin() {
                 </Label>
               </div> */}
 
-              <div className="flex gap-2 ml-auto">
-                <Button onClick={handleGenerate} size="sm">
+              <div className="flex flex-wrap w-full gap-2 sm:ml-auto sm:w-auto">
+                <Button onClick={handleGenerate} size="sm" className="flex-1 sm:flex-none">
                   <RefreshCw className="h-4 w-4 mr-1" /> Gerar
                 </Button>
                 {scheduleData && (
                   <>
-                    <Button onClick={handleSave} variant="outline" size="sm">
+                    <Button
+                      onClick={handleSave}
+                      variant="outline"
+                      size="sm"
+                      className="flex-1 sm:flex-none"
+                    >
                       <Save className="h-4 w-4 mr-1" /> Salvar
                     </Button>
                     <Button
@@ -348,6 +554,7 @@ export default function Admin() {
                       }
                       variant="outline"
                       size="sm"
+                      className="flex-1 sm:flex-none"
                     >
                       {viewMode === "edit" ? (
                         <Eye className="h-4 w-4 mr-1" />
@@ -358,16 +565,26 @@ export default function Admin() {
                     </Button>
                     <Button
                       onClick={handlePublish}
-                      variant={
-                        scheduleStatus === "published"
-                          ? "destructive"
-                          : "default"
-                      }
+                      variant="outline"
                       size="sm"
+                      className={
+                        scheduleStatus === "published"
+                          ? "flex-1 sm:flex-none"
+                          : "flex-1 sm:flex-none bg-emerald-600 hover:bg-emerald-700 text-white"
+                      }
                     >
+                      <CheckCircle className="h-4 w-4 mr-1" />
                       {scheduleStatus === "published"
                         ? "Despublicar"
                         : "Publicar"}
+                    </Button>
+                    <Button
+                      onClick={handleDelete}
+                      variant="destructive"
+                      size="sm"
+                      className="flex-1 sm:flex-none"
+                    >
+                      <Trash className="h-4 w-4 mr-1" /> Excluir
                     </Button>
                   </>
                 )}
@@ -399,7 +616,11 @@ export default function Admin() {
             )}
 
             {/* Schedule content */}
-            {scheduleData ? (
+            {scheduleLoading ? (
+              <div className="flex items-center justify-center min-h-[50vh]">
+                <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+              </div>
+            ) : scheduleData ? (
               viewMode === "edit" ? (
                 <ScheduleEditor
                   data={scheduleData}
@@ -412,6 +633,7 @@ export default function Admin() {
                   month={month}
                   year={year}
                   acolytes={acolytes}
+                  onUpdate={setScheduleData}
                 />
               )
             ) : (

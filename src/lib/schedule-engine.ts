@@ -11,6 +11,8 @@ import {
   SATURDAY_HOSPITAL_MASS,
   WEEKDAY_MASSES,
   FIRST_FRIDAY_MASS,
+  DEFAULT_SCHEDULE_SETTINGS,
+  ScheduleSettings,
 } from "@/types/schedule";
 
 // ========== DATE HELPERS ==========
@@ -45,33 +47,39 @@ function formatDateBR(date: Date): string {
   return `${d}/${m}`;
 }
 
-// ========== FIXED RULES ==========
+// ========== CONFIGURABLE RULES ==========
 
-const WEEKEND_ONLY_NAMES = [
-  "João Pedro",
-  "Maria Parra",
-  "Evandro",
-  "Gustavo Dellatorre",
-  "Fernanda",
-];
-const WEAK_ACOLYTES = [
-  "Ana Júlia",
-  "Erik",
-  "Maria Eduarda",
-  "Maria Parra",
-  "Giovana",
-];
-const LOW_COMMITMENT = ["Daniel", "Kamily"];
-const COUPLES: [string, string][] = [
-  ["Fernanda", "Gustavo Dellatorre"],
-  ["Evandro", "Allana"],
-];
+function mergeSettings(settings?: Partial<ScheduleSettings>): ScheduleSettings {
+  return {
+    ...DEFAULT_SCHEDULE_SETTINGS,
+    ...settings,
+    weekendOnlyNames:
+      settings?.weekendOnlyNames ?? DEFAULT_SCHEDULE_SETTINGS.weekendOnlyNames,
+    weakAcolytes:
+      settings?.weakAcolytes ?? DEFAULT_SCHEDULE_SETTINGS.weakAcolytes,
+    lowCommitmentNames:
+      settings?.lowCommitmentNames ??
+      DEFAULT_SCHEDULE_SETTINGS.lowCommitmentNames,
+    couples: settings?.couples ?? DEFAULT_SCHEDULE_SETTINGS.couples,
+    individualRestrictions:
+      settings?.individualRestrictions ??
+      DEFAULT_SCHEDULE_SETTINGS.individualRestrictions,
+    targetChapelLocationIncludes:
+      settings?.targetChapelLocationIncludes ??
+      DEFAULT_SCHEDULE_SETTINGS.targetChapelLocationIncludes,
+  };
+}
+
+function locationMatches(location: string, terms: string[] = []): boolean {
+  return terms.some((term) => term && location.includes(term));
+}
 
 function canServe(
   acolyte: Acolyte,
   entry: { date: string; dayOfWeek: number; location: string; time: string },
   variableRules: VariableRule[],
   isVacation: boolean,
+  settings: ScheduleSettings,
 ): boolean {
   const name = acolyte.name;
   const dow = entry.dayOfWeek;
@@ -81,32 +89,33 @@ function canServe(
   if (acolyte.vacation_only && !isVacation) return false;
 
   // Weekend-only people
-  if (WEEKEND_ONLY_NAMES.includes(name) && !isWeekend) return false;
+  if (settings.weekendOnlyNames.includes(name) && !isWeekend) return false;
 
-  // Yara: only 7h or 9h30 at São Judas
-  if (name === "Yara") {
-    if (entry.location.includes("Santa Ter")) return false;
-    if (!["7h", "9h30"].includes(entry.time)) return false;
-  }
-
-  if (name === "Giovana") {
-    if (entry.location.includes("Fátima")) return false;
-  }
-
-  // Paulo Ricardo: only Sunday morning
-  if (name === "Paulo Ricardo") {
-    if (dow !== 0) return false;
-    if (!["7h", "9h30"].includes(entry.time)) return false;
-  }
-
-  // Maria Anália: titular de Agissê e Sebastião (sempre que houver missa lá aos sábados)
-  if (name === "Maria Anália") {
-    if (dow !== 6) return false; // Só serve de sábado
+  const individualRule = settings.individualRestrictions.find(
+    (rule) => rule.name === name,
+  );
+  if (individualRule) {
+    if (individualRule.onlyWeekends && !isWeekend) return false;
     if (
-      !entry.location.includes("Agissê") &&
-      !entry.location.includes("Sebastião")
+      individualRule.onlyDayOfWeek !== undefined &&
+      dow !== individualRule.onlyDayOfWeek
     )
-      return false; // Só serve nessas capelas
+      return false;
+    if (
+      individualRule.allowedTimes?.length &&
+      !individualRule.allowedTimes.includes(entry.time)
+    )
+      return false;
+    if (
+      individualRule.requiredLocationIncludes?.length &&
+      !locationMatches(entry.location, individualRule.requiredLocationIncludes)
+    )
+      return false;
+    if (
+      individualRule.blockedLocationIncludes?.length &&
+      locationMatches(entry.location, individualRule.blockedLocationIncludes)
+    )
+      return false;
   }
 
   // Allana: always on Friday (handled by preference, not restriction here)
@@ -142,7 +151,9 @@ export function generateSchedule(
   acolytes: Acolyte[],
   variableRules: VariableRule[],
   isVacation: boolean = false,
+  rawSettings?: Partial<ScheduleSettings>,
 ): ScheduleData {
+  const settings = mergeSettings(rawSettings);
   const days = getDaysInMonth(year, month);
   const activeAcolytes = acolytes.filter((a) => a.active);
 
@@ -165,14 +176,6 @@ export function generateSchedule(
 
   const sections: ScheduleSection[] = [];
 
-  function getWeeksBetween(date1: Date, date2: Date): number {
-    // Zera as horas para comparar apenas os dias
-    const d1 = new Date(date1.getFullYear(), date1.getMonth(), date1.getDate());
-    const d2 = new Date(date2.getFullYear(), date2.getMonth(), date2.getDate());
-    const diffInMs = Math.abs(d2.getTime() - d1.getTime());
-    return Math.floor(diffInMs / (1000 * 60 * 60 * 24 * 7));
-  }
-
   // Helper to pick acolytes for a slot
   function pickAcolytes(
     entry: { date: string; dayOfWeek: number; location: string; time: string },
@@ -182,15 +185,19 @@ export function generateSchedule(
     const picked: Acolyte[] = [];
     const isWeekend = entry.dayOfWeek === 0 || entry.dayOfWeek === 6;
 
-    // 🔥 1. REGRA ABSOLUTA: Forçar Maria Anália aos sábados em Agissê/Sebastião
-    const isTargetChapel =
-      entry.location.includes("Agissê") || entry.location.includes("Sebastião");
+    const isTargetChapel = locationMatches(
+      entry.location,
+      settings.targetChapelLocationIncludes,
+    );
     if (entry.dayOfWeek === 6 && isTargetChapel) {
-      const maria = activeAcolytes.find((a) => a.name === "Maria Anália");
-      if (maria) {
-        picked.push(maria);
-        assignmentCount[maria.id] = (assignmentCount[maria.id] || 0) + 1;
-        lastWeekendChapel[maria.id] = entry.location;
+      const fixedAcolyte = activeAcolytes.find(
+        (a) => a.name === settings.targetChapelAcolyteName,
+      );
+      if (fixedAcolyte) {
+        picked.push(fixedAcolyte);
+        assignmentCount[fixedAcolyte.id] =
+          (assignmentCount[fixedAcolyte.id] || 0) + 1;
+        lastWeekendChapel[fixedAcolyte.id] = `${entry.location}|${entry.time}`;
       }
     }
 
@@ -202,7 +209,8 @@ export function generateSchedule(
     // 2. Filtra os elegíveis (removendo quem já foi forçado na etapa anterior)
     const eligible = activeAcolytes.filter((a) => {
       if (picked.some((p) => p.id === a.id)) return false; // Já foi escalado à força
-      if (!canServe(a, entry, variableRules, isVacation)) return false;
+      if (!canServe(a, entry, variableRules, isVacation, settings))
+        return false;
       // Check max assignments
       if (
         maxAssignments[a.id] !== undefined &&
@@ -214,11 +222,19 @@ export function generateSchedule(
 
     // 3. Ordena os elegíveis para balancear a escala
     const sorted = shuffle(eligible).sort((a, b) => {
-      // Low commitment people get deprioritized slightly
-      const aLow = LOW_COMMITMENT.includes(a.name) ? 1 : 0;
-      const bLow = LOW_COMMITMENT.includes(b.name) ? 1 : 0;
-      if (aLow !== bLow) return aLow - bLow;
-      return (assignmentCount[a.id] || 0) - (assignmentCount[b.id] || 0);
+      // Em vez de barrar completamente, damos um peso artificial.
+      // O algoritmo "finge" que Daniel e Kamily já começam o mês com 2 escalas prontas.
+      const penaltyA = settings.lowCommitmentNames.includes(a.name)
+        ? settings.lowCommitmentPenalty
+        : 0;
+      const penaltyB = settings.lowCommitmentNames.includes(b.name)
+        ? settings.lowCommitmentPenalty
+        : 0;
+
+      const scoreA = (assignmentCount[a.id] || 0) + penaltyA;
+      const scoreB = (assignmentCount[b.id] || 0) + penaltyB;
+
+      return scoreA - scoreB;
     });
 
     // 4. Aplica a preferência (ex: Giovana em Santa Tereza)
@@ -230,13 +246,12 @@ export function generateSchedule(
       }
     }
 
-    // 5. Evita a mesma capela dois fins de semana seguidos
+    // 5. Evita o mesmo local E horário dois fins de semana seguidos
+    const locTimeKey = `${entry.location}|${entry.time}`; // 🔥 Cria uma chave única de Local+Horário
     const filtered = isWeekend
       ? sorted
-          .filter((a) => lastWeekendChapel[a.id] !== entry.location)
-          .concat(
-            sorted.filter((a) => lastWeekendChapel[a.id] === entry.location),
-          )
+          .filter((a) => lastWeekendChapel[a.id] !== locTimeKey)
+          .concat(sorted.filter((a) => lastWeekendChapel[a.id] === locTimeKey))
       : sorted;
 
     // 6. Preenche as vagas restantes evitando deixar apenas acólitos fracos
@@ -250,19 +265,19 @@ export function generateSchedule(
       // If we'd have only weak acolytes, skip weak ones until we have a strong one
       if (count >= 2 && picked.length === count - 1) {
         const allWeak = [...picked, a].every((p) =>
-          WEAK_ACOLYTES.includes(p.name),
+          settings.weakAcolytes.includes(p.name),
         );
         if (allWeak) {
           const strong = uniqueFiltered.find(
             (s) =>
-              !WEAK_ACOLYTES.includes(s.name) &&
+              !settings.weakAcolytes.includes(s.name) &&
               !picked.find((p) => p.id === s.id) &&
               s.id !== a.id,
           );
           if (strong) {
             picked.push(strong);
             assignmentCount[strong.id] = (assignmentCount[strong.id] || 0) + 1;
-            if (isWeekend) lastWeekendChapel[strong.id] = entry.location;
+            if (isWeekend) lastWeekendChapel[strong.id] = locTimeKey;
             continue;
           }
         }
@@ -270,7 +285,7 @@ export function generateSchedule(
 
       picked.push(a);
       assignmentCount[a.id] = (assignmentCount[a.id] || 0) + 1;
-      if (isWeekend) lastWeekendChapel[a.id] = entry.location;
+      if (isWeekend) lastWeekendChapel[a.id] = locTimeKey;
     }
 
     return picked.map((a) => a.id);
@@ -282,7 +297,7 @@ export function generateSchedule(
   for (const sunday of sundays) {
     for (const mass of SUNDAY_MASSES) {
       const preference = mass.location.includes("Santa Ter")
-        ? "Giovana"
+        ? settings.santaTerezaPreferenceName
         : undefined;
       const ids = pickAcolytes(
         {
@@ -306,7 +321,6 @@ export function generateSchedule(
   sections.push({ title: "Domingos", entries: sundayEntries });
 
   // ---- SATURDAYS ----
-  const ANCHOR_DATE = new Date(2026, 3, 11); // Referência: 11/04/2026 (Última missa em Agissê)
   const saturdays = days.filter((d) => d.getDay() === 6);
   const saturdayEntries: ScheduleEntry[] = [];
 
@@ -314,11 +328,8 @@ export function generateSchedule(
     const weekNum = getWeekNumber(saturday);
     const dateStr = formatDate(saturday);
 
-    // 1. Biweekly Agissê (Prioridade Máxima)
-    // Se a diferença de semanas para 11/04 for par (0, 2, 4...), tem missa.
-    const weeksSinceAnchor = getWeeksBetween(saturday, ANCHOR_DATE);
-
-    if (weeksSinceAnchor % 2 === 0) {
+    // 1. Agissê/São Sebastião: sempre no 2º e 4º sábado do mês.
+    if (weekNum === 2 || weekNum === 4) {
       const ids = pickAcolytes(
         {
           date: dateStr,
@@ -327,7 +338,7 @@ export function generateSchedule(
           time: SATURDAY_BIWEEKLY_MASS.time,
         },
         SATURDAY_BIWEEKLY_MASS.requiredAcolytes,
-        "Maria Anália", // Força a preferência aqui
+        settings.targetChapelAcolyteName,
       );
 
       saturdayEntries.push({
@@ -421,7 +432,7 @@ export function generateSchedule(
         time: FIRST_FRIDAY_MASS.time,
       },
       FIRST_FRIDAY_MASS.requiredAcolytes,
-      "Allana",
+      settings.firstFridayPreferenceName,
     );
     weekdayEntries.push({
       date: formatDate(firstFriday),
@@ -444,16 +455,19 @@ export function validateSchedule(
   acolytes: Acolyte[],
   variableRules: VariableRule[],
   isVacation: boolean = false,
+  rawSettings?: Partial<ScheduleSettings>,
 ): RuleViolation[] {
+  const settings = mergeSettings(rawSettings);
   const violations: RuleViolation[] = [];
   const acolyteMap = new Map(acolytes.map((a) => [a.id, a]));
   const dailyAssignments: Record<string, Record<string, number>> = {};
+  const entriesByDate: Record<string, ScheduleEntry[]> = {};
 
   // Track assignments
   const assignmentCount: Record<string, number> = {};
   const weekendChapelHistory: Record<
     string,
-    { location: string; date: string }[]
+    { location: string; time: string; date: string }[]
   > = {};
 
   // Max assignments from variable rules
@@ -466,6 +480,9 @@ export function validateSchedule(
 
   for (const section of data.sections) {
     for (const entry of section.entries) {
+      if (!entriesByDate[entry.date]) entriesByDate[entry.date] = [];
+      entriesByDate[entry.date].push(entry);
+
       for (const acolyteId of entry.acolytes) {
         const acolyte = acolyteMap.get(acolyteId);
         if (!acolyte) continue;
@@ -485,7 +502,7 @@ export function validateSchedule(
           });
         }
         // Check fixed rules
-        if (!canServe(acolyte, entry, variableRules, isVacation)) {
+        if (!canServe(acolyte, entry, variableRules, isVacation, settings)) {
           violations.push({
             type: "error",
             message: `${acolyte.name} não pode servir em ${entry.location} ${entry.time} no dia ${formatDateBR(new Date(entry.date + "T12:00:00"))}`,
@@ -497,9 +514,12 @@ export function validateSchedule(
         const isWeekend = entry.dayOfWeek === 0 || entry.dayOfWeek === 6;
         if (isWeekend) {
           const history = weekendChapelHistory[acolyteId] || [];
+
+          // 🔥 AGORA VERIFICA SE O LOCAL E O HORÁRIO SÃO IGUAIS
           const lastSameChapel = history.filter(
-            (h) => h.location === entry.location,
+            (h) => h.location === entry.location && h.time === entry.time,
           );
+
           if (lastSameChapel.length > 0) {
             const lastDate = new Date(
               lastSameChapel[lastSameChapel.length - 1].date,
@@ -507,24 +527,30 @@ export function validateSchedule(
             const thisDate = new Date(entry.date);
             const diffDays =
               (thisDate.getTime() - lastDate.getTime()) / (1000 * 60 * 60 * 24);
+
             // Ignorar o aviso se for a Maria Anália em suas capelas fixas
             const isMariaFixed =
-              acolyte.name === "Maria Anália" &&
-              (entry.location.includes("Agissê") ||
-                entry.location.includes("Sebastião"));
+              acolyte.name === settings.targetChapelAcolyteName &&
+              locationMatches(
+                entry.location,
+                settings.targetChapelLocationIncludes,
+              );
 
             if (diffDays <= 7 && !isMariaFixed) {
               violations.push({
                 type: "warning",
-                message: `${acolyte.name} está repetindo ${entry.location} em fins de semana seguidos`,
+                message: `${acolyte.name} está repetindo ${entry.location} às ${entry.time} em fins de semana seguidos`,
                 entry,
               });
             }
           }
           if (!weekendChapelHistory[acolyteId])
             weekendChapelHistory[acolyteId] = [];
+
+          // 🔥 SALVA O HORÁRIO NO HISTÓRICO
           weekendChapelHistory[acolyteId].push({
             location: entry.location,
+            time: entry.time,
             date: entry.date,
           });
         }
@@ -534,7 +560,7 @@ export function validateSchedule(
       if (entry.acolytes.length >= 2) {
         const allWeak = entry.acolytes.every((id) => {
           const a = acolyteMap.get(id);
-          return a && WEAK_ACOLYTES.includes(a.name);
+          return a && settings.weakAcolytes.includes(a.name);
         });
         if (allWeak) {
           violations.push({
@@ -548,13 +574,44 @@ export function validateSchedule(
       // Check single weak acolyte alone
       if (entry.acolytes.length === 1) {
         const a = acolyteMap.get(entry.acolytes[0]);
-        if (a && WEAK_ACOLYTES.includes(a.name)) {
+        if (a && settings.weakAcolytes.includes(a.name)) {
           violations.push({
             type: "warning",
             message: `${a.name} (Acólito com dificuldade) está sozinho(a) em ${entry.location} ${entry.time} (${formatDateBR(new Date(entry.date + "T12:00:00"))})`,
             entry,
           });
         }
+      }
+    }
+  }
+
+  for (const [date, entries] of Object.entries(entriesByDate)) {
+    for (const [firstName, secondName] of settings.couples) {
+      const first = acolytes.find((a) => a.name === firstName);
+      const second = acolytes.find((a) => a.name === secondName);
+      if (!first || !second) continue;
+
+      const firstEntries = entries.filter((entry) =>
+        entry.acolytes.includes(first.id),
+      );
+      const secondEntries = entries.filter((entry) =>
+        entry.acolytes.includes(second.id),
+      );
+
+      if (firstEntries.length === 0 || secondEntries.length === 0) continue;
+
+      const servedTogether = entries.some(
+        (entry) =>
+          entry.acolytes.includes(first.id) &&
+          entry.acolytes.includes(second.id),
+      );
+
+      if (!servedTogether) {
+        violations.push({
+          type: "warning",
+          message: `${firstName} e ${secondName} estão no mesmo dia (${formatDateBR(new Date(date + "T12:00:00"))}), mas não na mesma missa`,
+          entry: firstEntries[0],
+        });
       }
     }
   }

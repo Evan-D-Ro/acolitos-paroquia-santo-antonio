@@ -4,7 +4,7 @@ import path from "path";
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => ({
-  base: "/acolitos-paroquia-santo-antonio/",
+  base: "/",
   server: {
     host: "::",
     port: 8080,

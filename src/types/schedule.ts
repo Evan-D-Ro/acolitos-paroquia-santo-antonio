@@ -18,6 +18,9 @@ export interface ScheduleEntry {
   time: string;
   acolytes: string[]; // acolyte IDs
   acolyteNames?: string[];
+  isSolemn?: boolean;
+  solemnityName?: string;
+  acolyteRoles?: Record<string, string>;
 }
 
 export interface ScheduleSection {
@@ -46,11 +49,80 @@ export interface RuleViolation {
   entry?: ScheduleEntry;
 }
 
+export interface IndividualRestriction {
+  name: string;
+  onlyWeekends?: boolean;
+  onlyDayOfWeek?: number;
+  allowedTimes?: string[];
+  requiredLocationIncludes?: string[];
+  blockedLocationIncludes?: string[];
+}
+
+export interface ScheduleSettings {
+  weekendOnlyNames: string[];
+  weakAcolytes: string[];
+  lowCommitmentNames: string[];
+  couples: [string, string][];
+  lowCommitmentPenalty: number;
+  individualRestrictions: IndividualRestriction[];
+  targetChapelAcolyteName: string;
+  targetChapelLocationIncludes: string[];
+  santaTerezaPreferenceName: string;
+  firstFridayPreferenceName: string;
+}
+
+export const DEFAULT_SCHEDULE_SETTINGS: ScheduleSettings = {
+  weekendOnlyNames: [
+    "Maria Parra",
+    "Evandro",
+    "Gustavo Dellatorre",
+    "Fernanda",
+  ],
+  weakAcolytes: [
+    "Ana Júlia",
+    "Erik",
+    "Maria Eduarda",
+    "Maria Parra",
+    "Giovana",
+  ],
+  lowCommitmentNames: [],
+  couples: [
+    ["Fernanda", "Gustavo Dellatorre"],
+    ["Evandro", "Allana"],
+  ],
+  lowCommitmentPenalty: 2,
+  individualRestrictions: [
+    {
+      name: "Yara",
+      allowedTimes: ["7h", "9h30"],
+      blockedLocationIncludes: ["Santa Ter"],
+    },
+    {
+      name: "Giovana",
+      blockedLocationIncludes: ["Fátima"],
+    },
+    {
+      name: "Paulo Ricardo",
+      onlyDayOfWeek: 0,
+      allowedTimes: ["7h", "7h30", "9h30"],
+    },
+    {
+      name: "Maria Anália",
+      onlyDayOfWeek: 6,
+      requiredLocationIncludes: ["Agissê", "Sebastião"],
+    },
+  ],
+  targetChapelAcolyteName: "Maria Anália",
+  targetChapelLocationIncludes: ["Agissê", "Sebastião"],
+  santaTerezaPreferenceName: "Giovana",
+  firstFridayPreferenceName: "Allana",
+};
+
 // Mass configuration
 export const SUNDAY_MASSES: MassSlot[] = [
   { location: "Salão Paroquial", time: "7h", requiredAcolytes: 2 },
-  { location: "Salão Paroquial", time: "9h30", requiredAcolytes: 2 },
   { location: `Santa Tereza d'Ávila`, time: "7h30", requiredAcolytes: 2 },
+  { location: "Salão Paroquial", time: "9h30", requiredAcolytes: 2 },
   { location: "N. Sra. de Fátima", time: "18h", requiredAcolytes: 2 },
   { location: "Salão Paroquial", time: "19h", requiredAcolytes: 2 },
 ];
