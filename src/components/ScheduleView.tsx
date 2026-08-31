@@ -1,10 +1,34 @@
 import { ScheduleData, MONTH_NAMES, Acolyte } from "@/types/schedule";
-import { useState, useRef } from "react"; // Adicionado useRef
+import { useState, useRef, useMemo, useEffect } from "react";
 import { useLocation } from "react-router-dom";
-import { toPng, toJpeg } from "html-to-image"; // Para exportação de imagem
-import { jsPDF } from "jspdf"; // Para exportação de PDF
-import { Button } from "@/components/ui/button"; // Assumindo que você usa Shadcn/ui
-import { Download, FileImage, FileText } from "lucide-react"; // Ícones para os botões
+import { toPng, toJpeg } from "html-to-image";
+import { jsPDF } from "jspdf";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import {
+  Download,
+  FileImage,
+  FileText,
+  Users,
+  Plus,
+  ArrowLeftRight,
+  Trash2,
+  Sparkles,
+  Calendar,
+  Church,
+  Search,
+  Check,
+  X,
+} from "lucide-react";
+import { toast } from "@/components/ui/sonner";
 import Swal from "sweetalert2";
 
 interface ScheduleViewProps {
@@ -297,236 +321,29 @@ export default function ScheduleView({
   };
 
   // =======================================================================
-  // Lógica Unificada de Gerenciamento da Célula
+  // Lógica Unificada de Gerenciamento da Célula (Modal Moderno)
   // =======================================================================
-  const manageCell = async (entry: any) => {
+  const [managingEntry, setManagingEntry] = useState<any | null>(null);
+
+  const manageCell = (entry: any) => {
     if (!isAdminRoute || !entry) return;
+    setManagingEntry(entry);
+  };
 
-    const dateFormatted = formatDateBR(entry.date);
-    const locTime = formatLocationAndTime(entry.location, entry.time);
-
-    const saveSolemnityDetails = async () => {
-      const roleRows = entry.acolytes
-        .map((id: string, index: number) => {
-          const role = entry.acolyteRoles?.[id] || "";
-          return `
-            <div class="swal2-field" style="margin-top:8px;text-align:left;">
-              <label style="display:block;font-size:12px;margin-bottom:4px;">${getName(id)}</label>
-              <input id="role-${index}" class="swal2-input" style="width:100%;margin:0;" value="${role}" placeholder="Função" />
-            </div>
-          `;
-        })
-        .join("");
-
-      const { value } = await Swal.fire({
-        title: "Detalhes da missa",
-        html: `
-          <div style="display:grid;gap:12px;text-align:left;">
-            <label style="display:flex;align-items:center;gap:8px;">
-              <input id="is-solemn" type="checkbox" ${entry.isSolemn ? "checked" : ""} />
-              <span>Missa solene</span>
-            </label>
-            <div>
-              <label style="display:block;font-size:12px;margin-bottom:4px;">Solenidade</label>
-              <input id="solemnity-name" class="swal2-input" style="width:100%;margin:0;" value="${entry.solemnityName || ""}" placeholder="Ex: Corpus Christi" />
-            </div>
-            ${roleRows}
-          </div>
-        `,
-        showCancelButton: true,
-        confirmButtonText: "Salvar",
-        cancelButtonText: "Cancelar",
-        focusConfirm: false,
-        didOpen: () => {
-          const modal = Swal.getPopup();
-          if (!modal) return;
-          const checkbox = modal.querySelector<HTMLInputElement>("#is-solemn");
-          const nameInput = modal.querySelector<HTMLInputElement>("#solemnity-name");
-          const roleInputs = modal.querySelectorAll<HTMLInputElement>('[id^="role-"]');
-
-          const toggleRoleInputs = () => {
-            const enabled = checkbox?.checked;
-            roleInputs.forEach((input) => {
-              input.disabled = !enabled;
-            });
-            if (nameInput) nameInput.disabled = !enabled;
-          };
-
-          checkbox?.addEventListener("change", toggleRoleInputs);
-          toggleRoleInputs();
-        },
-        preConfirm: () => {
-          const modal = Swal.getPopup();
-          if (!modal) return null;
-
-          const isSolemn = modal.querySelector<HTMLInputElement>("#is-solemn")?.checked ?? false;
-          const solemnityName = modal.querySelector<HTMLInputElement>("#solemnity-name")?.value.trim() || "";
-          const acolyteRoles = Object.fromEntries(
-            entry.acolytes.map((id: string, index: number) => {
-              const value =
-                modal.querySelector<HTMLInputElement>(`#role-${index}`)?.value.trim() || "";
-              return [id, value];
-            }).filter(([, value]) => value),
-          );
-
-          return { isSolemn, solemnityName, acolyteRoles };
-        },
-      });
-
-      if (value) {
-        upsertEntry(entry.sectionIdx, entry.entryIdx, entry, {
-          isSolemn: value.isSolemn,
-          solemnityName: value.isSolemn ? value.solemnityName : "",
-          acolyteRoles: value.isSolemn ? value.acolyteRoles : {},
-        });
-      }
-    };
-
-    // Função interna auxiliar para o fluxo de Adicionar
-    const handleAdd = async () => {
-      const availableAcolytes = acolytes
-        .filter((a) => a.active && !entry.acolytes.includes(a.id))
-        .reduce((acc, a) => ({ ...acc, [a.id]: a.name }), {});
-
-      if (Object.keys(availableAcolytes).length === 0) {
-        return Swal.fire({
-          icon: "info",
-          title: "Aviso",
-          text: "Todos os acólitos ativos já estão nesta escala!",
-        });
-      }
-
-      const { value: newId } = await Swal.fire({
-        title: "Adicionar Acólito",
-        html: `Escala: <b>${dateFormatted}</b> - ${locTime}`,
-        input: "select",
-        inputOptions: availableAcolytes,
-        inputPlaceholder: "Escolha um acólito...",
-        showCancelButton: true,
-        confirmButtonText: "Adicionar",
-        cancelButtonText: "Cancelar",
-      });
-
-      if (newId) {
-        updateEntryAcolytes(entry.sectionIdx, entry.entryIdx, entry, [
-          ...entry.acolytes,
-          newId,
-        ]);
-      }
-    };
-
-    const actions: Record<string, string> = {
-      add: "Adicionar Acólito",
-      details: "Editar detalhes",
-    };
-
-    if (entry.acolytes && entry.acolytes.length > 0) {
-      actions.edit = "Substituir Acólito";
-      actions.remove = "Remover Acólito";
-    }
-
-    // 1. Se a escala estiver vazia, permite adicionar ou editar detalhes
-    if (!entry.acolytes || entry.acolytes.length === 0) {
-      const { value: emptyAction } = await Swal.fire({
-        title: "Gerenciar Escala",
-        html: `<b>${dateFormatted}</b> - ${locTime}`,
-        input: "select",
-        inputOptions: {
-          details: "Editar detalhes",
-          add: "Adicionar Acólito",
-        },
-        inputPlaceholder: "Escolha uma ação...",
-        inputValidator: (value) => (!value ? "Escolha uma opção!" : null),
-        showCancelButton: true,
-        confirmButtonText: "Continuar",
-        cancelButtonText: "Cancelar",
-      });
-
-      if (!emptyAction) return;
-      if (emptyAction === "add") return handleAdd();
-      if (emptyAction === "details") return saveSolemnityDetails();
-      return;
-    }
-
-    // 2. Se já tiver gente, pergunta o que o administrador quer fazer
-    const { value: action } = await Swal.fire({
-      title: "Gerenciar Escala",
-      html: `<b>${dateFormatted}</b> - ${locTime}`,
-      input: "select",
-      inputOptions: actions,
-      inputPlaceholder: "Escolha uma ação...",
-      inputValidator: (value) => (!value ? "Escolha uma opção!" : null),
-      showCancelButton: true,
-      confirmButtonText: "Continuar",
-      cancelButtonText: "Cancelar",
-    });
-
-    if (!action) return; // Cancelou
-
-    if (action === "add") {
-      return handleAdd();
-    }
-
-    if (action === "details") {
-      return saveSolemnityDetails();
-    }
-
-    // 3. Fluxo de Substituir ou Remover (precisa escolher qual acólito)
-    const currentAcolytes = entry.acolytes.reduce(
-      (acc: any, id: string) => ({ ...acc, [id]: getName(id) }),
-      {},
+  const handleSaveSlot = (updates: {
+    acolytes: string[];
+    isSolemn: boolean;
+    solemnityName: string;
+    acolyteRoles: Record<string, string>;
+  }) => {
+    if (!managingEntry) return;
+    upsertEntry(
+      managingEntry.sectionIdx,
+      managingEntry.entryIdx,
+      managingEntry,
+      updates,
     );
-
-    const { value: selectedId } = await Swal.fire({
-      title: action === "edit" ? "Substituir quem?" : "Remover quem?",
-      input: "select",
-      inputOptions: currentAcolytes,
-      inputPlaceholder: "Selecione o acólito...",
-      showCancelButton: true,
-      confirmButtonText: action === "edit" ? "Escolher Substituto" : "Remover",
-      cancelButtonText: "Cancelar",
-      confirmButtonColor: action === "remove" ? "#d33" : "#3085d6",
-      inputValidator: (val) => (!val ? "Selecione um!" : null),
-    });
-
-    if (!selectedId) return; // Cancelou
-
-    if (action === "remove") {
-      const newAcolytes = entry.acolytes.filter(
-        (id: string) => id !== selectedId,
-      );
-      updateEntryAcolytes(
-        entry.sectionIdx,
-        entry.entryIdx,
-        entry,
-        newAcolytes,
-      );
-    } else if (action === "edit") {
-      const availableAcolytes = acolytes
-        .filter((a) => a.active && !entry.acolytes.includes(a.id))
-        .reduce((acc, a) => ({ ...acc, [a.id]: a.name }), {});
-
-      const { value: newId } = await Swal.fire({
-        title: `Substituir ${getName(selectedId)} por:`,
-        input: "select",
-        inputOptions: availableAcolytes,
-        inputPlaceholder: "Escolha um substituto...",
-        showCancelButton: true,
-        confirmButtonText: "Substituir",
-      });
-
-      if (newId) {
-        const newAcolytes = entry.acolytes.map((id: string) =>
-          id === selectedId ? newId : id,
-        );
-        updateEntryAcolytes(
-          entry.sectionIdx,
-          entry.entryIdx,
-          entry,
-          newAcolytes,
-        );
-      }
-    }
+    setManagingEntry(null);
   };
 
   return (
@@ -692,24 +509,26 @@ export default function ScheduleView({
                             return (
                               <td
                                 key={date}
-                                // 1. Evento para Computador (Botão Direito)
-                                onContextMenu={(e) => {
+                                onClick={() => {
                                   if (!isAdminRoute || !editableEntry) return;
-                                  e.preventDefault(); // Impede de abrir o menu padrão do navegador
                                   manageCell(editableEntry);
                                 }}
-                                // 2. Eventos para Celular (Toque longo de 600ms)
+                                onContextMenu={(e) => {
+                                  if (!isAdminRoute || !editableEntry) return;
+                                  e.preventDefault();
+                                  manageCell(editableEntry);
+                                }}
                                 onTouchStart={() => {
                                   if (!isAdminRoute || !editableEntry) return;
                                   touchTimeout.current = setTimeout(() => {
                                     manageCell(editableEntry);
-                                  }, 600);
+                                  }, 500);
                                 }}
                                 onTouchEnd={clearTouchTimeout}
                                 onTouchMove={clearTouchTimeout}
                                 title={
                                   isAdminRoute && editableEntry
-                                    ? "Clique com o botão direito (ou segure) para gerenciar"
+                                    ? "Clique para gerenciar os acólitos desta missa"
                                     : ""
                                 }
                                 className={`break-words border-r border-border px-1.5 py-2 text-center last:border-r-0 sm:px-3 sm:py-3 whitespace-pre-wrap transition-colors ${
@@ -718,7 +537,7 @@ export default function ScheduleView({
                                     : isHighlighted
                                       ? "bg-yellow-200/40 text-foreground font-semibold"
                                       : "text-muted-foreground"
-                                } ${isAdminRoute && editableEntry ? "hover:bg-muted/30" : ""}`}
+                                } ${isAdminRoute && editableEntry ? "hover:bg-accent/20 cursor-pointer" : ""}`}
                               >
                                 {(() => {
                                   // Se a escala não existir ou estiver vazia
@@ -831,6 +650,427 @@ export default function ScheduleView({
           </div>
         </div>
       )}
+
+      {/* Modal Moderno de Gerenciamento da Missa/Célula */}
+      {isAdminRoute && (
+        <SlotManagerDialog
+          isOpen={!!managingEntry}
+          onClose={() => setManagingEntry(null)}
+          entry={managingEntry}
+          acolytes={acolytes}
+          getName={getName}
+          onSave={handleSaveSlot}
+        />
+      )}
     </div>
+  );
+}
+
+interface SlotManagerDialogProps {
+  isOpen: boolean;
+  onClose: () => void;
+  entry: any;
+  acolytes: Acolyte[];
+  getName: (id: string) => string;
+  onSave: (updates: {
+    acolytes: string[];
+    isSolemn: boolean;
+    solemnityName: string;
+    acolyteRoles: Record<string, string>;
+  }) => void;
+}
+
+function SlotManagerDialog({
+  isOpen,
+  onClose,
+  entry,
+  acolytes,
+  getName,
+  onSave,
+}: SlotManagerDialogProps) {
+  if (!entry) return null;
+
+  const [currentAcolytes, setCurrentAcolytes] = useState<string[]>(
+    entry.acolytes || [],
+  );
+  const [isSolemn, setIsSolemn] = useState<boolean>(entry.isSolemn || false);
+  const [solemnityName, setSolemnityName] = useState<string>(
+    entry.solemnityName || "",
+  );
+  const [roles, setRoles] = useState<Record<string, string>>(
+    entry.acolyteRoles || {},
+  );
+
+  const [substitutingId, setSubstitutingId] = useState<string | null>(null);
+  const [searchSubstitute, setSearchSubstitute] = useState("");
+  const [searchAdd, setSearchAdd] = useState("");
+  const [isAddingOpen, setIsAddingOpen] = useState(false);
+
+  // Sincronizar estado inicial quando a entrada abrir
+  useEffect(() => {
+    if (entry) {
+      setCurrentAcolytes(entry.acolytes || []);
+      setIsSolemn(entry.isSolemn || false);
+      setSolemnityName(entry.solemnityName || "");
+      setRoles(entry.acolyteRoles || {});
+      setSubstitutingId(null);
+      setSearchSubstitute("");
+      setSearchAdd("");
+      setIsAddingOpen(false);
+    }
+  }, [entry, isOpen]);
+
+  // Lista de acólitos disponíveis para adicionar (apenas ativos que ainda não estão nesta missa)
+  const availableToAdd = useMemo(() => {
+    return acolytes
+      .filter((a) => a.active && !currentAcolytes.includes(a.id))
+      .filter((a) =>
+        a.name.toLowerCase().includes(searchAdd.trim().toLowerCase()),
+      );
+  }, [acolytes, currentAcolytes, searchAdd]);
+
+  // Lista de acólitos disponíveis para substituição
+  const availableToSubstitute = useMemo(() => {
+    return acolytes
+      .filter((a) => a.active && !currentAcolytes.includes(a.id))
+      .filter((a) =>
+        a.name.toLowerCase().includes(searchSubstitute.trim().toLowerCase()),
+      );
+  }, [acolytes, currentAcolytes, searchSubstitute]);
+
+  const handleAddAcolyte = (id: string) => {
+    setCurrentAcolytes((prev) => [...prev, id]);
+    setSearchAdd("");
+    setIsAddingOpen(false);
+  };
+
+  const handleRemoveAcolyte = (id: string) => {
+    setCurrentAcolytes((prev) => prev.filter((aId) => aId !== id));
+    setRoles((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    if (substitutingId === id) setSubstitutingId(null);
+  };
+
+  const handleSubstitute = (oldId: string, newId: string) => {
+    setCurrentAcolytes((prev) =>
+      prev.map((aId) => (aId === oldId ? newId : aId)),
+    );
+    setRoles((prev) => {
+      const next = { ...prev };
+      if (next[oldId]) {
+        next[newId] = next[oldId];
+        delete next[oldId];
+      }
+      return next;
+    });
+    setSubstitutingId(null);
+    setSearchSubstitute("");
+  };
+
+  const handleRoleChange = (id: string, role: string) => {
+    setRoles((prev) => ({
+      ...prev,
+      [id]: role,
+    }));
+  };
+
+  const handleSaveAndClose = () => {
+    const filteredRoles = Object.fromEntries(
+      Object.entries(roles).filter(
+        ([id, role]) => currentAcolytes.includes(id) && role.trim(),
+      ),
+    );
+
+    onSave({
+      acolytes: currentAcolytes,
+      isSolemn,
+      solemnityName: isSolemn ? solemnityName.trim() : "",
+      acolyteRoles: isSolemn ? filteredRoles : {},
+    });
+    toast.success("Escala atualizada com sucesso!");
+    onClose();
+  };
+
+  const dateFormatted = formatDateBR(entry.date);
+  const locTime = formatLocationAndTime(entry.location, entry.time);
+
+  return (
+    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-md sm:max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogHeader className="border-b border-border pb-3">
+          <div className="flex items-center gap-2">
+            <Calendar className="h-5 w-5 text-accent shrink-0" />
+            <DialogTitle className="text-base font-heading font-semibold">
+              Gerenciar Escala: {dateFormatted}
+            </DialogTitle>
+          </div>
+          <DialogDescription className="text-xs text-muted-foreground flex items-center gap-1.5 pt-1">
+            <Church className="h-3.5 w-3.5 shrink-0" />
+            <span className="font-medium text-foreground/80">{locTime}</span>
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4 py-2">
+          {/* Seção 1: Acólitos Escalados */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                <Users className="h-3.5 w-3.5 text-accent" />
+                Acólitos Escalados ({currentAcolytes.length})
+              </label>
+            </div>
+
+            {currentAcolytes.length === 0 ? (
+              <div className="text-center py-6 border border-dashed rounded-lg bg-muted/20">
+                <p className="text-xs text-muted-foreground">
+                  Nenhum acólito escalado para esta celebração.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {currentAcolytes.map((id) => {
+                  const name = getName(id);
+                  const isSubstitutingThis = substitutingId === id;
+
+                  return (
+                    <div
+                      key={id}
+                      className="rounded-lg border border-border bg-card p-3 shadow-2xs space-y-2 transition-all"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="h-8 w-8 rounded-full bg-accent/20 text-accent font-semibold text-xs flex items-center justify-center shrink-0">
+                            {name.charAt(0).toUpperCase() || "?"}
+                          </div>
+                          <span className="text-sm font-semibold text-foreground truncate">
+                            {name}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-1 shrink-0">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() =>
+                              setSubstitutingId(
+                                isSubstitutingThis ? null : id,
+                              )
+                            }
+                            className="h-7 px-2.5 text-xs font-medium"
+                          >
+                            <ArrowLeftRight className="h-3 w-3 mr-1" />
+                            {isSubstitutingThis ? "Cancelar" : "Substituir"}
+                          </Button>
+
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleRemoveAcolyte(id)}
+                            className="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                            title="Remover da escala"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+
+                      {/* Painel inline de substituição */}
+                      {isSubstitutingThis && (
+                        <div className="p-3 rounded-md bg-accent/10 border border-accent/30 space-y-2 animate-in fade-in-50">
+                          <div className="flex items-center justify-between text-xs font-semibold text-accent-foreground">
+                            <span>Substituir {name} por:</span>
+                            <button
+                              type="button"
+                              onClick={() => setSubstitutingId(null)}
+                              className="text-muted-foreground hover:text-foreground text-[11px]"
+                            >
+                              Fechar
+                            </button>
+                          </div>
+
+                          <div className="relative">
+                            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                            <Input
+                              placeholder="Buscar substituto..."
+                              value={searchSubstitute}
+                              onChange={(e) =>
+                                setSearchSubstitute(e.target.value)
+                              }
+                              className="h-8 pl-8 text-xs bg-background"
+                              autoFocus
+                            />
+                          </div>
+
+                          <div className="max-h-36 overflow-y-auto space-y-1 pr-1">
+                            {availableToSubstitute.length === 0 ? (
+                              <p className="text-[11px] text-muted-foreground text-center py-2">
+                                Nenhum outro acólito ativo encontrado.
+                              </p>
+                            ) : (
+                              availableToSubstitute.map((sub) => (
+                                <button
+                                  key={sub.id}
+                                  type="button"
+                                  onClick={() =>
+                                    handleSubstitute(id, sub.id)
+                                  }
+                                  className="w-full text-left px-2.5 py-1.5 rounded text-xs hover:bg-card flex items-center justify-between transition-colors border border-transparent hover:border-border"
+                                >
+                                  <span className="font-medium">{sub.name}</span>
+                                  <Check className="h-3.5 w-3.5 text-accent" />
+                                </button>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Campo de função litúrgica se for missa solene */}
+                      {isSolemn && (
+                        <div className="pt-1">
+                          <Input
+                            placeholder="Função (ex: Turiferário, Naveta, Crucífero...)"
+                            value={roles[id] || ""}
+                            onChange={(e) =>
+                              handleRoleChange(id, e.target.value)
+                            }
+                            className="h-7 text-xs bg-background"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Seção 2: Adicionar Novo Acólito */}
+          <div className="space-y-2">
+            {isAddingOpen ? (
+              <div className="p-3 rounded-lg border border-border bg-muted/30 space-y-2 animate-in fade-in-50">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold">
+                    Adicionar Acólito à Missa
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setIsAddingOpen(false)}
+                    className="text-muted-foreground hover:text-foreground text-xs"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                  <Input
+                    placeholder="Filtrar acólito para adicionar..."
+                    value={searchAdd}
+                    onChange={(e) => setSearchAdd(e.target.value)}
+                    className="h-8 pl-8 text-xs bg-background"
+                    autoFocus
+                  />
+                </div>
+
+                <div className="max-h-36 overflow-y-auto space-y-1 pr-1">
+                  {availableToAdd.length === 0 ? (
+                    <p className="text-[11px] text-muted-foreground text-center py-2">
+                      Nenhum outro acólito ativo disponível.
+                    </p>
+                  ) : (
+                    availableToAdd.map((a) => (
+                      <button
+                        key={a.id}
+                        type="button"
+                        onClick={() => handleAddAcolyte(a.id)}
+                        className="w-full text-left px-2.5 py-1.5 rounded text-xs hover:bg-card border border-transparent hover:border-border flex items-center justify-between transition-colors"
+                      >
+                        <span className="font-medium">{a.name}</span>
+                        <Plus className="h-3.5 w-3.5 text-accent" />
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+            ) : (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setIsAddingOpen(true)}
+                className="w-full text-xs h-8 border-dashed"
+              >
+                <Plus className="h-3.5 w-3.5 mr-1" />
+                Adicionar Acólito a esta Missa
+              </Button>
+            )}
+          </div>
+
+          {/* Seção 3: Missa Solene & Solenidade */}
+          <div className="rounded-lg border border-border p-3 bg-muted/20 space-y-2.5">
+            <label className="flex items-center justify-between cursor-pointer">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-amber-500" />
+                <span className="text-xs font-semibold text-foreground">
+                  Missa Solene / Solenidade
+                </span>
+              </div>
+              <input
+                type="checkbox"
+                checked={isSolemn}
+                onChange={(e) => setIsSolemn(e.target.checked)}
+                className="rounded accent-primary h-4 w-4"
+              />
+            </label>
+
+            {isSolemn && (
+              <div className="space-y-2 pt-1">
+                <div>
+                  <label className="block text-[11px] font-medium text-muted-foreground mb-1">
+                    Nome da Solenidade
+                  </label>
+                  <Input
+                    placeholder="Ex: Corpus Christi, Páscoa, Festa da Padroeira"
+                    value={solemnityName}
+                    onChange={(e) => setSolemnityName(e.target.value)}
+                    className="h-8 text-xs bg-background"
+                  />
+                </div>
+                <p className="text-[10px] text-muted-foreground">
+                  Você pode preencher as funções litúrgicas específicas nos cartões dos acólitos acima.
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <DialogFooter className="flex flex-row justify-end gap-2 pt-3 border-t border-border">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onClose}
+            className="text-xs h-8"
+          >
+            Cancelar
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            onClick={handleSaveAndClose}
+            className="text-xs h-8 bg-primary text-primary-foreground font-medium shadow-sm hover:opacity-90"
+          >
+            <Check className="h-3.5 w-3.5 mr-1" />
+            Salvar Alterações
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

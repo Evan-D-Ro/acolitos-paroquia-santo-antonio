@@ -53,7 +53,7 @@ export default function Index() {
           .eq("year", viewYear)
           .eq("status", "published")
           .maybeSingle(),
-        supabase.from("acolytes").select("*").eq("active", true),
+        supabase.from("acolytes").select("*").order("name"),
       ]);
 
       if (acoRes.data) setAcolytes(acoRes.data);

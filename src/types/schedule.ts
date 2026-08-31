@@ -53,6 +53,7 @@ export interface IndividualRestriction {
   name: string;
   onlyWeekends?: boolean;
   onlyDayOfWeek?: number;
+  allowedDaysOfWeek?: number[];
   allowedTimes?: string[];
   requiredLocationIncludes?: string[];
   blockedLocationIncludes?: string[];
@@ -69,6 +70,7 @@ export interface ScheduleSettings {
   targetChapelLocationIncludes: string[];
   santaTerezaPreferenceName: string;
   firstFridayPreferenceName: string;
+  avoidConsecutiveDays?: boolean;
 }
 
 export const DEFAULT_SCHEDULE_SETTINGS: ScheduleSettings = {
@@ -116,6 +118,7 @@ export const DEFAULT_SCHEDULE_SETTINGS: ScheduleSettings = {
   targetChapelLocationIncludes: ["Agissê", "Sebastião"],
   santaTerezaPreferenceName: "Giovana",
   firstFridayPreferenceName: "Allana",
+  avoidConsecutiveDays: true,
 };
 
 // Mass configuration
